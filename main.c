@@ -49,25 +49,43 @@ static void initpid(void) {
 	vardef("pid", NULL, mklist(mkstr(str("%d", getpid())), NULL));
 }
 
-/* runesrc -- run the user's profile, if it exists */
+/* runstartup -- run a startup file */
+static void runstartup(char* filename) {
+  int fd;
+  fd = eopen(filename, oOpen);
+  if (fd != -1) {
+    ExceptionHandler
+      runfd(fd, filename, 0);
+    CatchException (e)
+      if (termeq(e->term, "exit"))
+        exit(exitstatus(e->next));
+      else if (termeq(e->term, "error"))
+        eprint("%L\n",
+              e->next == NULL ? NULL : e->next->next,
+              " ");
+      else if (!issilentsignal(e))
+        eprint("uncaught exception: %L\n", e, " ");
+      return;
+    EndExceptionHandler
+  }
+}
+
+/* runesenv -- run /etc/esenv and $HOME/.esenv, if each exists */
+static void runesenv(void) {
+  runstartup(str("/etc/esenv"));
+  runstartup(str("%L/.esenv", varlookup("home", NULL), "\001"));
+}
+
+/* runesprofile -- run /etc/esprofile and $HOME/.esprofile, if each exists */
+static void runesprofile(void) {
+  runstartup(str("/etc/esprofile"));
+  runstartup(str("%L/.esprofile", varlookup("home", NULL), "\001"));
+}
+
+/* runesrc -- run /etc/esrc and $HOME/.esrc, if each exists */
 static void runesrc(void) {
-	char *esrc = str("%L/.esrc", varlookup("home", NULL), "\001");
-	int fd = eopen(esrc, oOpen);
-	if (fd != -1) {
-		ExceptionHandler
-			runfd(fd, esrc, 0);
-		CatchException (e)
-			if (termeq(e->term, "exit"))
-				exit(exitstatus(e->next));
-			else if (termeq(e->term, "error"))
-				eprint("%L\n",
-				       e->next == NULL ? NULL : e->next->next,
-				       " ");
-			else if (!issilentsignal(e))
-				eprint("uncaught exception: %L\n", e, " ");
-			return;
-		EndExceptionHandler
-	}
+  runstartup(str("/etc/esrc"));
+  runstartup(str("%L/.esrc", varlookup("home", NULL), "\001"));
 }
 
 /* usage -- print usage message and die */
@@ -180,18 +198,23 @@ getopt_done:
 		initinput();
 		initprims();
 		initvars();
-	
+
 		runinitial();
-	
+
 		initpath();
 		initpid();
 		initsignals(runflags & run_interactive, allowquit);
 		hidevariables();
 		initenv(environ, protected);
-	
-		if (loginshell)
-			runesrc();
-	
+
+    runesenv();
+
+    if (loginshell)
+      runesprofile();
+
+    if ((runflags & run_interactive) > 0)
+      runesrc();
+
 		if (cmd == NULL && !cmd_stdin && optind < ac) {
 			int fd;
 			char *file = av[optind++];
@@ -203,7 +226,7 @@ getopt_done:
 			vardef("0", NULL, mklist(mkstr(file), NULL));
 			return exitstatus(runfd(fd, file, runflags));
 		}
-	
+
 		vardef("*", NULL, listify(ac - optind, av + optind));
 		vardef("0", NULL, mklist(mkstr(av[0]), NULL));
 		if (cmd != NULL)
